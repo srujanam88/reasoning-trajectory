@@ -1,0 +1,8 @@
+{
+  "N": 2813,
+  "n_hidden": 33,
+  "hidden_size": 4096,
+  "model": "llama-3.1-8b-instruct",
+  "dtype": "float16",
+  "tf_match_rate": 0.9972311085733951
+}
