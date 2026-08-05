@@ -19,9 +19,10 @@ from pipeline.label import answers_match, extract_answer_after_hash
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="llama-3.2-1b-instruct")
+    ap.add_argument("--split", default="train")
     args = ap.parse_args()
 
-    rd = config.run_dir(args.model)
+    rd = config.run_dir(args.model, dataset=f"gsm8k_{args.split}")
     gens = [GenResult.from_json(json.loads(line)) for line in open(rd / "gen.jsonl")]
 
     correct_by_ex, parsed_ok = {}, 0

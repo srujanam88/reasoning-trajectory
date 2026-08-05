@@ -33,6 +33,17 @@ def run_dir(model: str, dataset: str = "gsm8k") -> Path:
     return d
 
 
+def steer_run_dir(model: str, dataset: str, tag: str) -> Path:
+    """Per-(model, dataset, tag) steering-experiment directory (Stages 7-9).
+
+    Kept under run_dir(model, dataset)/steer/tag so regenerated outputs never overwrite
+    the original gen.jsonl / activations.dat / index.parquet.
+    """
+    d = run_dir(model, dataset) / "steer" / tag
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def get_device() -> str:
     if torch.cuda.is_available():
         return "cuda"

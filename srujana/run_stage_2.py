@@ -18,9 +18,10 @@ from pipeline.generate import GenResult
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="llama-3.2-1b-instruct")
+    ap.add_argument("--split", default="train")
     args = ap.parse_args()
 
-    rd = config.run_dir(args.model)
+    rd = config.run_dir(args.model, dataset=f"gsm8k_{args.split}")
     gen_path = rd / "gen.jsonl"
     if not gen_path.exists():
         raise SystemExit(f"[S2] missing {gen_path}; run stage 1 first.")

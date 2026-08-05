@@ -15,6 +15,7 @@ Baseline:
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -129,6 +130,48 @@ def _select_C(X, y, seed=42):
     return best_C, best_auc
 
 
+@dataclass
+class FittedPredictor:
+    """A deployable scaler->PCA->torch-LR pipeline, reusable on new (unseen) data.
+
+    Used by Stage 7 to gate the activation-steering intervention: fit once on the
+    train split's late_trajectory features, then call predict_proba on the test
+    split's own already-cached activations to decide which examples to steer.
+    """
+
+    scaler: StandardScaler
+    pca: Optional[PCA]
+    model: "_TorchLR"
+    C: float
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        Xs = self.scaler.transform(X)
+        if self.pca is not None:
+            Xs = self.pca.transform(Xs)
+        with torch.no_grad():
+            return torch.sigmoid(self.model(torch.tensor(Xs, dtype=torch.float32))).numpy()
+
+
+def _fit_core(
+    X: np.ndarray, y: np.ndarray, pca_dim: Optional[int], seed: int
+) -> Tuple[FittedPredictor, float]:
+    """Shared scaler->PCA->5-fold-C-selection->torch-LR glue. Fits on ALL of (X, y)
+    passed in (caller decides what to hold back, if anything). Returns the fitted
+    pipeline plus the CV AUC used to pick C."""
+    scaler = StandardScaler()
+    Xs = scaler.fit_transform(X)
+    pca = None
+    if pca_dim and Xs.shape[1] > pca_dim:
+        pca = PCA(n_components=pca_dim, random_state=seed)
+        Xs = pca.fit_transform(Xs)
+
+    C, cv_auc = _select_C(Xs, y, seed=seed)
+    # Carve a small val set purely for early stopping on the final fit.
+    Xt2, Xv2, yt2, yv2 = train_test_split(Xs, y, test_size=0.1, stratify=y, random_state=seed)
+    model, _ = _train(Xt2, yt2, Xv2, yv2, C, seed=seed)
+    return FittedPredictor(scaler=scaler, pca=pca, model=model, C=C), cv_auc
+
+
 def fit_eval(
     X: np.ndarray,
     y: np.ndarray,
@@ -140,28 +183,27 @@ def fit_eval(
         return {"auc": float("nan"), "n": len(X), "C": None, "note": "insufficient data"}
 
     Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.1, stratify=y, random_state=seed)
-
-    scaler = StandardScaler()
-    Xtr = scaler.fit_transform(Xtr)
-    Xte = scaler.transform(Xte)
-    if pca_dim and Xtr.shape[1] > pca_dim:
-        pca = PCA(n_components=pca_dim, random_state=seed)
-        Xtr = pca.fit_transform(Xtr)
-        Xte = pca.transform(Xte)
-
-    C, cv_auc = _select_C(Xtr, ytr, seed=seed)
-    # Carve a small val set from train for early stopping on the final fit.
-    Xt2, Xv2, yt2, yv2 = train_test_split(Xtr, ytr, test_size=0.1, stratify=ytr, random_state=seed)
-    model, _ = _train(Xt2, yt2, Xv2, yv2, C, seed=seed)
-    with torch.no_grad():
-        p = torch.sigmoid(model(torch.tensor(Xte, dtype=torch.float32))).numpy()
+    fitted, cv_auc = _fit_core(Xtr, ytr, pca_dim, seed)
+    p = fitted.predict_proba(Xte)
     return {
         "auc": float(roc_auc_score(yte, p)),
         "cv_auc": cv_auc,
-        "C": C,
+        "C": fitted.C,
         "n": len(X),
-        "dim": Xtr.shape[1],
+        "dim": Xtr.shape[1] if fitted.pca is None else fitted.pca.n_components_,
     }
+
+
+def fit_deployable(
+    X: np.ndarray,
+    y: np.ndarray,
+    pca_dim: Optional[int] = 128,
+    seed: int = 42,
+) -> Tuple[FittedPredictor, Dict]:
+    """Fit on ALL of (X, y) -- no held-out test carve-out, since the caller (Stage 7)
+    evaluates gating quality on a wholly separate test split, not a slice of train."""
+    fitted, cv_auc = _fit_core(X, y, pca_dim, seed)
+    return fitted, {"cv_auc": cv_auc, "C": fitted.C, "n": len(X)}
 
 
 def layer_sweep(examples, kind: str, layers: List[int], pca_dim: int = 128, seed: int = 42):

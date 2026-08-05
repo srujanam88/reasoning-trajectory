@@ -19,11 +19,14 @@ from pipeline.probes import (
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="llama-3.2-1b-instruct")
+    ap.add_argument("--split", default="train")
     ap.add_argument("--transfer-from", default=None, help="source model name for cross-model transfer")
+    ap.add_argument("--transfer-from-split", default=None,
+                     help="split for --transfer-from (defaults to --split)")
     ap.add_argument("--min-per-class", type=int, default=10)
     args = ap.parse_args()
 
-    rd = config.run_dir(args.model)
+    rd = config.run_dir(args.model, dataset=f"gsm8k_{args.split}")
     examples, meta = load_examples(rd)
     X, y = build_step_identity_matrix(examples)
     layers = list(range(meta["n_hidden"]))
@@ -46,7 +49,8 @@ def main():
         print(f"\nshuffled-label control (avg mean acc): {mean_shuf:.3f}  (paper ~0.59)")
 
     if args.transfer_from:
-        rd_src = config.run_dir(args.transfer_from)
+        src_split = args.transfer_from_split or args.split
+        rd_src = config.run_dir(args.transfer_from, dataset=f"gsm8k_{src_split}")
         ex_src, _ = load_examples(rd_src)
         Xs, ys = build_step_identity_matrix(ex_src)
         tr = cross_model_transfer(Xs, ys, X, y, layers=layers, min_per_class=args.min_per_class)

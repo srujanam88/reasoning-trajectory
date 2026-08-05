@@ -26,7 +26,7 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
-    rd = config.run_dir(args.model)
+    rd = config.run_dir(args.model, dataset=f"gsm8k_{args.split}")
     examples = load_gsm8k(split=args.split, n=args.n, seed=args.seed)
     print(f"[S1] model={args.model}  split={args.split}  n={len(examples)}")
 

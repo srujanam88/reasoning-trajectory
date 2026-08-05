@@ -16,11 +16,12 @@ def _fmt_ci(ci):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="llama-3.2-1b-instruct")
+    ap.add_argument("--split", default="train")
     ap.add_argument("--layer", type=int, default=-1, help="hidden-state index; -1 = final layer")
     ap.add_argument("--n-boot", type=int, default=1000)
     args = ap.parse_args()
 
-    rd = config.run_dir(args.model)
+    rd = config.run_dir(args.model, dataset=f"gsm8k_{args.split}")
     examples, meta = load_examples(rd)
     layer = meta["n_hidden"] - 1 if args.layer < 0 else args.layer
     print(f"[S5] model={args.model}  layer={layer}  examples={len(examples)}")
