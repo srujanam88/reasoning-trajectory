@@ -41,7 +41,16 @@ def main():
     ap.add_argument("--layer", type=int, default=MID_CENTER_HS)
     ap.add_argument("--tune-n", type=int, default=200, help="train examples held out for threshold tuning")
     ap.add_argument("--tune-eval-n", type=int, default=15, help="subset of the tune slice used for the real regeneration confirmation pass")
-    ap.add_argument("--test-n", type=int, default=40, help="test subsample for final evaluation")
+    ap.add_argument("--test-n", type=int, default=40, help="test subsample for final evaluation (ignored if --stratify-steps is given)")
+    ap.add_argument("--stratify-steps", type=int, nargs="+", default=None,
+                     help="guarantee --per-step-n examples from each of these step counts "
+                          "in the final test evaluation, instead of a flat random subsample "
+                          "(GSM8K step counts skew short, so a flat sample can miss the "
+                          "paper's 6/7-step headline buckets entirely)")
+    ap.add_argument("--per-step-n", type=int, default=20)
+    ap.add_argument("--percentile", type=int, default=None,
+                     help="skip the expensive threshold confirmation sweep and use this "
+                          "percentile's thresholds directly (from a prior run's chosen value)")
     ap.add_argument("--alpha", type=float, default=0.05)
     ap.add_argument("--rank", type=int, default=32)
     ap.add_argument("--max-new-tokens", type=int, default=400)
@@ -99,28 +108,39 @@ def main():
         preservation = 100.0 * preserved / n_orig_correct if n_orig_correct else float("nan")
         return base_acc, new_acc, preservation
 
-    tune_eval_candidates = [eid for eid in tune_ids if eid in train_gens and train_examples[eid].correct in (0, 1)]
-    tune_eval_ids = sorted(rng.sample(tune_eval_candidates, min(args.tune_eval_n, len(tune_eval_candidates))))
+    if args.percentile is not None:
+        chosen = next(c for c in candidates if c["percentile"] == args.percentile)
+        print(f"\n[S8] skipping threshold confirmation sweep; using percentile={args.percentile} directly")
+    else:
+        tune_eval_candidates = [eid for eid in tune_ids if eid in train_gens and train_examples[eid].correct in (0, 1)]
+        tune_eval_ids = sorted(rng.sample(tune_eval_candidates, min(args.tune_eval_n, len(tune_eval_candidates))))
 
-    print(f"\n[S8] shortlisting thresholds on {len(tune_eval_ids)} tune examples...")
-    best = None
-    for cand in candidates:
-        base_acc, new_acc, preservation = eval_candidate(cand, tune_eval_ids, train_gens, train_examples)
-        gain = new_acc - base_acc
-        ok = preservation >= 97.0 or np.isnan(preservation)
-        print(f"  p={cand['percentile']:>3}  base={base_acc:.1f}%  new={new_acc:.1f}%  gain={gain:+.1f}pp  "
-              f"preservation={preservation:.1f}%  {'OK' if ok else 'REJECT (preservation<97)'}")
-        if ok and (best is None or gain > best[1]):
-            best = (cand, gain)
+        print(f"\n[S8] shortlisting thresholds on {len(tune_eval_ids)} tune examples...")
+        best = None
+        for cand in candidates:
+            base_acc, new_acc, preservation = eval_candidate(cand, tune_eval_ids, train_gens, train_examples)
+            gain = new_acc - base_acc
+            ok = preservation >= 97.0 or np.isnan(preservation)
+            print(f"  p={cand['percentile']:>3}  base={base_acc:.1f}%  new={new_acc:.1f}%  gain={gain:+.1f}pp  "
+                  f"preservation={preservation:.1f}%  {'OK' if ok else 'REJECT (preservation<97)'}")
+            if ok and (best is None or gain > best[1]):
+                best = (cand, gain)
 
-    if best is None:
-        print("[S8] no candidate met preservation>=97; falling back to the most permissive percentile")
-        best = (candidates[-1], None)
-    chosen = best[0]
-    print(f"\n[S8] chosen threshold percentile: {chosen['percentile']}")
+        if best is None:
+            print("[S8] no candidate met preservation>=97; falling back to the most permissive percentile")
+            best = (candidates[-1], None)
+        chosen = best[0]
+        print(f"\n[S8] chosen threshold percentile: {chosen['percentile']}")
 
     test_candidates = [eid for eid in test_examples if eid in test_gens and test_examples[eid].correct in (0, 1)]
-    test_ids = sorted(rng.sample(test_candidates, min(args.test_n, len(test_candidates))))
+    if args.stratify_steps:
+        test_ids = []
+        for k in args.stratify_steps:
+            bucket = sorted(eid for eid in test_candidates if test_examples[eid].n_steps == k)
+            test_ids += rng.sample(bucket, min(args.per_step_n, len(bucket)))
+        test_ids = sorted(test_ids)
+    else:
+        test_ids = sorted(rng.sample(test_candidates, min(args.test_n, len(test_candidates))))
     buckets = defaultdict(list)
     for eid in test_ids:
         buckets[test_examples[eid].n_steps].append(eid)
