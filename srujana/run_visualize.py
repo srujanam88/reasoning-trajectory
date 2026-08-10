@@ -11,7 +11,13 @@ from pipeline import config
 from pipeline.features import load_examples
 from pipeline.predictor import layer_sweep
 from pipeline.probes import build_step_identity_matrix, run_step_probes
-from pipeline.viz import DEFAULT_TSNE_LAYERS, plot_auc_by_layer, plot_probe_accuracy_by_layer, plot_tsne_grid
+from pipeline.viz import (
+    DEFAULT_TSNE_LAYERS,
+    plot_auc_by_layer,
+    plot_probe_accuracy_by_layer,
+    plot_tsne_grid,
+    save_probe_accuracy,
+)
 
 
 def main():
@@ -50,6 +56,9 @@ def main():
         print(f"[VIZ] step-identity probe accuracy across all {n_hidden} layers (Fig 1b)...")
         X, y = build_step_identity_matrix(examples)
         res = run_step_probes(X, y, layers=layers, seed=args.seed)
+        # Persist the numbers so subset re-plots need only this JSON (no activations/recompute).
+        acc_json = save_probe_accuracy(res["acc"], str(plots_dir / "probe_accuracy.json"))
+        print(f"[VIZ] saved {acc_json}")
         out = plot_probe_accuracy_by_layer(res["acc"], str(plots_dir / "probe_accuracy_by_layer.png"))
         print(f"[VIZ] saved {out}")
 

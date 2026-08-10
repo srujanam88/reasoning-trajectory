@@ -45,7 +45,10 @@ def generate_batch(
     pad_id = tokenizer.pad_token_id
     eos_id = tokenizer.eos_token_id
 
-    for start in range(0, len(examples), batch_size):
+    import time
+    n_batches = (len(examples) + batch_size - 1) // batch_size
+    for bi, start in enumerate(range(0, len(examples), batch_size)):
+        t0 = time.time()
         batch = examples[start : start + batch_size]
         prompts = [build_prompt(ex.question) for ex in batch]
         enc = tokenizer(prompts, return_tensors="pt", padding=True, add_special_tokens=True)
@@ -84,4 +87,5 @@ def generate_batch(
                     gen_text=gen_text,
                 )
             )
+        print(f"[gen] batch {bi+1}/{n_batches}  (+{len(batch)} ex)  {time.time()-t0:.1f}s", flush=True)
     return results

@@ -1,0 +1,73 @@
+"""Offset-based step/answer marker parsing for the VLM's generated reasoning.
+
+Reuses the text pipeline's exact-offset machinery (char->token map on the TRUE generated
+tokens). Two step modes:
+  - "marker"    : find `Step N:` occurrences (paper-faithful, if the model complies).
+  - "paragraph" : segment the reasoning region by blank-line paragraphs (each paragraph start
+                  is a step boundary) -- the natural-format fallback (paper Section 3.5).
+The answer marker is `Answer:` (falls back to `</think>` if absent). Cached activation is the
+token PRECEDING each marker, exactly as in the text pipeline.
+"""
+from __future__ import annotations
+
+import re
+from typing import Optional
+
+from ..markers import STEP_RE, MarkerPos, MarkerResult, _char_offsets, _char_to_tok
+
+PARA_RE = re.compile(r"\n[ \t]*\n")
+THINK_CLOSE = "</think>"
+
+
+def _make_pos(kind, step_id, parsed_num, char, offsets, prompt_len):
+    j = _char_to_tok(offsets, char)
+    abs_marker = prompt_len + j
+    return MarkerPos(kind=kind, step_id=step_id, parsed_num=parsed_num, char=char,
+                     gen_tok_index=j, abs_marker_pos=abs_marker, abs_prec_pos=abs_marker - 1)
+
+
+def parse_markers(
+    example_id: str,
+    gen_ids,
+    tokenizer,
+    prompt_len: int,
+    step_mode: str = "marker",
+    answer_mark: str = "Answer:",
+) -> MarkerResult:
+    full_text = tokenizer.decode(gen_ids, skip_special_tokens=False)
+    offsets = _char_offsets(gen_ids, tokenizer)
+    res = MarkerResult(example_id=example_id, prompt_len=prompt_len, gen_len=len(gen_ids),
+                       full_text=full_text)
+
+    # Answer marker: first `Answer:`; fall back to `</think>` boundary.
+    ans_char = full_text.find(answer_mark)
+    if ans_char < 0:
+        tclose = full_text.find(THINK_CLOSE)
+        ans_char = (tclose + len(THINK_CLOSE)) if tclose >= 0 else -1
+    if ans_char >= 0:
+        res.answer = _make_pos("answer", 0, None, ans_char, offsets, prompt_len)
+
+    region_end = ans_char if ans_char >= 0 else len(full_text)
+
+    if step_mode == "marker":
+        ordinal = 0
+        for m in STEP_RE.finditer(full_text):
+            if m.start() >= region_end:
+                break
+            ordinal += 1
+            res.steps.append(_make_pos("step", ordinal, int(m.group(1)), m.start(), offsets, prompt_len))
+    elif step_mode == "paragraph":
+        # Paragraph starts within the reasoning region: position 0, then after each blank line.
+        starts = [0] + [m.end() for m in PARA_RE.finditer(full_text) if m.end() < region_end]
+        # De-dup and keep only non-empty paragraphs.
+        seen, ordinal = set(), 0
+        for s in starts:
+            if s >= region_end or s in seen or not full_text[s:region_end].strip():
+                continue
+            seen.add(s)
+            ordinal += 1
+            res.steps.append(_make_pos("step", ordinal, None, s, offsets, prompt_len))
+    else:
+        raise ValueError(f"step_mode must be 'marker' or 'paragraph', got {step_mode}")
+
+    return res

@@ -118,6 +118,26 @@ def extract(
     return meta
 
 
+def export_slim(out_dir: Path, layers=None, out_name: str = "slim_acts.npz") -> Path:
+    """Write a compact npz keeping only `layers` (default: final layer) of the full memmap.
+
+    Run this on the box that has activations.dat. The result (~45 MB for one layer / 5.5k
+    positions vs ~1.5 GB for the full 33-layer memmap) is enough for distance analysis and any
+    final-layer probe/predictor, and is loaded transparently by features.load_examples.
+    """
+    acts, index, meta = load_activations(out_dir)
+    if layers is None:
+        layers = [meta["n_hidden"] - 1]
+    layers = [int(l) for l in layers]
+    sub = np.asarray(acts[:, layers, :], dtype=np.float16)  # [N, k, d]
+    out_path = Path(out_dir) / out_name
+    np.savez(
+        out_path, acts=sub, layers=np.array(layers, dtype=np.int64),
+        n_hidden=np.int64(meta["n_hidden"]), hidden_size=np.int64(meta["hidden_size"]),
+    )
+    return out_path
+
+
 def load_activations(out_dir: Path):
     """Open the memmap read-only along with meta + index."""
     import pandas as pd

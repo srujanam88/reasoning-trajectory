@@ -7,6 +7,7 @@ import argparse
 from pipeline import config
 from pipeline.distances import analyze
 from pipeline.features import load_examples
+from pipeline.persist import save_json
 
 
 def _fmt_ci(ci):
@@ -26,8 +27,11 @@ def main():
     layer = meta["n_hidden"] - 1 if args.layer < 0 else args.layer
     print(f"[S5] model={args.model}  layer={layer}  examples={len(examples)}")
 
+    out = {"model": args.model, "split": args.split, "layer": layer,
+           "n_boot": args.n_boot, "n_examples": len(examples), "metrics": {}}
     for metric, label in [("euc", "Euclidean"), ("cos", "Cosine")]:
         res = analyze(examples, layer=layer, metric=metric, n_boot=args.n_boot)
+        out["metrics"][metric] = res
         print(f"\n=== S5 SANITY: {label} distances (final layer) ===")
         print(f"{'transition':>18} {'correct':>10} {'incorrect':>10} {'d(I-C)':>9} {'CIoverlap':>10}")
         for t, r in res.items():
@@ -37,6 +41,9 @@ def main():
                   f"(nC={r['n_correct']}, nI={r['n_incorrect']})")
         print("note: paper Euclidean last->answer d(I-C) ~ -13.39 (Instruct 8B); "
               "'NO' overlap = significant divergence")
+
+    path = save_json(out, rd / "metrics_s5_distances.json")
+    print(f"\n[S5] saved metrics -> {path}")
 
 
 if __name__ == "__main__":

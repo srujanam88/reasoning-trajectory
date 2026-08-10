@@ -4,6 +4,7 @@ activations.dat/index.parquet, no GPU or new generation needed.
 """
 from __future__ import annotations
 
+import json
 from typing import Dict, List
 
 import matplotlib
@@ -14,6 +15,27 @@ from sklearn.manifold import TSNE
 
 from .features import ExampleActs
 from .probes import ANSWER_LABEL, build_step_identity_matrix
+
+
+def save_probe_accuracy(acc: Dict, path: str) -> str:
+    """Persist the per-class, per-layer probe accuracy dict to JSON so subset re-plots need
+    only this small file -- no activations.dat, no recompute. Keys are stringified
+    (class label, layer index); load_probe_accuracy reverses it."""
+    obj = {str(cls): {str(l): float(a) for l, a in per_layer.items()}
+           for cls, per_layer in acc.items()}
+    with open(path, "w") as f:
+        json.dump(obj, f)
+    return path
+
+
+def load_probe_accuracy(path: str) -> Dict:
+    """Inverse of save_probe_accuracy: restores int step-ids / 'answer' and int layer keys."""
+    raw = json.load(open(path))
+    acc = {}
+    for cls_s, per_layer in raw.items():
+        cls = ANSWER_LABEL if cls_s == ANSWER_LABEL else (int(cls_s) if cls_s.lstrip("-").isdigit() else cls_s)
+        acc[cls] = {int(l): float(a) for l, a in per_layer.items()}
+    return acc
 
 # A handful of representative layers spanning shallow -> deep, matching the paper's own
 # qualitative description ("layer 0" vs "later layers ~11, 21, 31").
@@ -56,17 +78,24 @@ def plot_tsne_grid(
     return out_path
 
 
-def plot_probe_accuracy_by_layer(acc: Dict, out_path: str):
-    """Fig 1b: per-class (step 1..K, answer) probe accuracy vs. layer."""
+def plot_probe_accuracy_by_layer(acc: Dict, out_path: str, include_classes=None):
+    """Fig 1b: per-class (step 1..K, answer) probe accuracy vs. layer.
+
+    include_classes: optional list of class labels to plot (e.g. [1, 2, 3, 5, 8, "answer"]);
+    None plots every class present. Restricting keeps colors distinct and the curves readable.
+    """
     fig, ax = plt.subplots(figsize=(7, 5))
     classes = sorted(acc.keys(), key=lambda c: (c == ANSWER_LABEL, c))
-    cmap = plt.get_cmap("tab10", len(classes))
+    if include_classes is not None:
+        wanted = {ANSWER_LABEL if str(c).lower() in ("answer", "ans") else c for c in include_classes}
+        classes = [c for c in classes if c in wanted]
+    cmap = plt.get_cmap("tab10")  # 10 distinct base colors
     for i, c in enumerate(classes):
         per_layer = acc[c]
         layers = sorted(per_layer)
         vals = [per_layer[l] for l in layers]
         label = "answer marker" if c == ANSWER_LABEL else f"step {c}"
-        ax.plot(layers, vals, marker="o", markersize=3, color=cmap(i), label=label)
+        ax.plot(layers, vals, marker="o", markersize=3, color=cmap(i % 10), label=label)
     ax.set_xlabel("layer (hidden_states index)")
     ax.set_ylabel("held-out probe accuracy")
     ax.set_ylim(0.0, 1.02)
