@@ -20,7 +20,7 @@ def main():
     ap.add_argument("--model", default="qwen3-vl-8b-thinking")
     ap.add_argument("--dataset", default="mathvista", choices=["mathvista", "mmmu", "cvbench"])
     ap.add_argument("--split", default=None)
-    ap.add_argument("--step-mode", default="marker", choices=["marker", "paragraph"])
+    ap.add_argument("--step-mode", default="think", choices=["think", "marker", "paragraph"])
     args = ap.parse_args()
 
     tag = f"{args.dataset}_{args.split or 'default'}_{args.step_mode}"

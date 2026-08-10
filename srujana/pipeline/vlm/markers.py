@@ -1,12 +1,15 @@
 """Offset-based step/answer marker parsing for the VLM's generated reasoning.
 
 Reuses the text pipeline's exact-offset machinery (char->token map on the TRUE generated
-tokens). Two step modes:
+tokens). Step modes:
+  - "think"     : (DEFAULT for Qwen3-VL-Thinking) segment the reasoning INSIDE <think>...</think>
+                  by sentence boundaries -- each sentence is a reasoning step. The post-</think>
+                  "Step N:" block is a summary, not reasoning, and is excluded. The answer
+                  marker is the end of </think> (reasoning complete = t(term)).
   - "marker"    : find `Step N:` occurrences (paper-faithful, if the model complies).
-  - "paragraph" : segment the reasoning region by blank-line paragraphs (each paragraph start
-                  is a step boundary) -- the natural-format fallback (paper Section 3.5).
-The answer marker is `Answer:` (falls back to `</think>` if absent). Cached activation is the
-token PRECEDING each marker, exactly as in the text pipeline.
+  - "paragraph" : segment the reasoning region by blank-line paragraphs.
+For marker/paragraph the answer marker is `Answer:` (falls back to `</think>`). Cached
+activation is the token PRECEDING each marker, exactly as in the text pipeline.
 """
 from __future__ import annotations
 
@@ -16,6 +19,9 @@ from typing import Optional
 from ..markers import STEP_RE, MarkerPos, MarkerResult, _char_offsets, _char_to_tok
 
 PARA_RE = re.compile(r"\n[ \t]*\n")
+# Sentence boundary: end punctuation + space + capital/digit (won't split "10.5").
+SENT_RE = re.compile(r"[.!?]+[\)\"']?\s+(?=[A-Z0-9])")
+THINK_OPEN = "<think>"
 THINK_CLOSE = "</think>"
 
 
@@ -31,13 +37,39 @@ def parse_markers(
     gen_ids,
     tokenizer,
     prompt_len: int,
-    step_mode: str = "marker",
+    step_mode: str = "think",
     answer_mark: str = "Answer:",
 ) -> MarkerResult:
     full_text = tokenizer.decode(gen_ids, skip_special_tokens=False)
     offsets = _char_offsets(gen_ids, tokenizer)
     res = MarkerResult(example_id=example_id, prompt_len=prompt_len, gen_len=len(gen_ids),
                        full_text=full_text)
+
+    if step_mode == "think":
+        # Reasoning region = inside <think>...</think>. The <think> open tag is usually part of
+        # the prompt (not generated), so default region_start = 0.
+        topen = full_text.find(THINK_OPEN)
+        region_start = (topen + len(THINK_OPEN)) if topen >= 0 else 0
+        tclose = full_text.find(THINK_CLOSE, region_start)
+        if tclose >= 0:
+            region_end = tclose
+            res.answer = _make_pos("answer", 0, None, tclose, offsets, prompt_len)  # t(term)=end of think
+        else:
+            # No </think>: fall back to Answer: marker, else end of text.
+            a = full_text.find(answer_mark)
+            region_end = a if a >= 0 else len(full_text)
+            if a >= 0:
+                res.answer = _make_pos("answer", 0, None, a, offsets, prompt_len)
+        region_text = full_text[region_start:region_end]
+        starts = [region_start] + [region_start + m.end() for m in SENT_RE.finditer(region_text)]
+        seen, ordinal = set(), 0
+        for s in starts:
+            if s >= region_end or s in seen or len(full_text[s:region_end].strip()) < 4:
+                continue
+            seen.add(s)
+            ordinal += 1
+            res.steps.append(_make_pos("step", ordinal, None, s, offsets, prompt_len))
+        return res
 
     # Answer marker: first `Answer:`; fall back to `</think>` boundary.
     ans_char = full_text.find(answer_mark)
@@ -68,6 +100,6 @@ def parse_markers(
             ordinal += 1
             res.steps.append(_make_pos("step", ordinal, None, s, offsets, prompt_len))
     else:
-        raise ValueError(f"step_mode must be 'marker' or 'paragraph', got {step_mode}")
+        raise ValueError(f"step_mode must be 'think', 'marker' or 'paragraph', got {step_mode}")
 
     return res

@@ -12,22 +12,19 @@ from .datasets import VLMExample
 
 ANSWER_MARK = "Answer:"
 
-# Marker mode asks for explicit "Step N:" structure (paper-faithful). Paragraph mode leaves the
-# reasoning free-form and we segment by paragraphs later. Both fix the final-answer marker.
+# "think" (default): let the model reason naturally inside <think>; we segment that region by
+# sentence later, so we do NOT ask for a "Step N:" summary (it would just waste tokens). "marker"
+# asks for explicit "Step N:" structure; "paragraph" is free-form. All fix the final-answer marker.
+_ANSWER_LINE = f'After you finish reasoning, on a new line write your final answer as "{ANSWER_MARK} <answer>".'
 _STEP_INSTRUCTION = {
-    "marker": (
-        "Show your reasoning as a numbered list where each step begins with "
-        '"Step N:" (Step 1:, Step 2:, ...). '
-        f'After your reasoning, on a new line write your final answer as "{ANSWER_MARK} <answer>".'
-    ),
-    "paragraph": (
-        "Think step by step. "
-        f'After your reasoning, on a new line write your final answer as "{ANSWER_MARK} <answer>".'
-    ),
+    "think": _ANSWER_LINE,
+    "paragraph": "Think step by step. " + _ANSWER_LINE,
+    "marker": ('Show your reasoning as a numbered list where each step begins with '
+               '"Step N:" (Step 1:, Step 2:, ...). ' + _ANSWER_LINE),
 }
 
 
-def build_messages(ex: VLMExample, step_mode: str = "marker") -> List[dict]:
+def build_messages(ex: VLMExample, step_mode: str = "think") -> List[dict]:
     """Chat messages for processor.apply_chat_template: image placeholders + question + instruction."""
     if step_mode not in _STEP_INSTRUCTION:
         raise ValueError(f"step_mode must be one of {list(_STEP_INSTRUCTION)}")

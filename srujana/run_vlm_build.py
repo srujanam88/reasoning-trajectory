@@ -23,7 +23,7 @@ def main():
     ap.add_argument("--dataset", default="mathvista", choices=["mathvista", "mmmu", "cvbench"])
     ap.add_argument("--split", default=None, help="dataset split (default: testmini/validation/test)")
     ap.add_argument("--n", type=int, default=None, help="subsample size (None = full split)")
-    ap.add_argument("--step-mode", default="marker", choices=["marker", "paragraph"])
+    ap.add_argument("--step-mode", default="think", choices=["think", "marker", "paragraph"])
     ap.add_argument("--max-new-tokens", type=int, default=2048)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--pilot", action="store_true", help="print sample generations for inspection")

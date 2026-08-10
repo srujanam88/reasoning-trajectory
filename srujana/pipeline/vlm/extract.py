@@ -58,7 +58,7 @@ def build_dataset(
     device: str,
     out_dir: Path,
     model_name: str,
-    step_mode: str = "marker",
+    step_mode: str = "think",
     max_new_tokens: int = 2048,
     checkpoint_every: int = 50,
 ) -> Dict:
