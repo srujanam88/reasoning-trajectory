@@ -103,6 +103,13 @@ def build_dataset(
         full = torch.tensor([full_ids], dtype=torch.long, device=device)
         attn = torch.ones_like(full)
         vision_kwargs = {k: v for k, v in inputs.items() if k not in ("input_ids", "attention_mask")}
+        if "mm_token_type_ids" in vision_kwargs:
+            # processor only computed token types for the prompt; generated tokens are plain text (type 0).
+            mtt = vision_kwargs["mm_token_type_ids"]
+            n_pad = full.shape[1] - mtt.shape[1]
+            if n_pad > 0:
+                pad = torch.zeros((mtt.shape[0], n_pad), dtype=mtt.dtype, device=mtt.device)
+                vision_kwargs["mm_token_type_ids"] = torch.cat([mtt, pad], dim=1)
         out = model(input_ids=full, attention_mask=attn, **vision_kwargs,
                     output_hidden_states=True, use_cache=False)
         logits = out.logits[0]
