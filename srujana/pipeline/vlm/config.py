@@ -10,6 +10,7 @@ from .. import config as base
 
 VLM_MODELS = {
     "qwen3-vl-8b-thinking": "Qwen/Qwen3-VL-8B-Thinking",  # 36 layers, hidden 4096 -> n_hidden 37
+    "qwen3-vl-8b-instruct": "Qwen/Qwen3-VL-8B-Instruct",  # same backbone, no forced <think>
 }
 
 

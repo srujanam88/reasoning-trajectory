@@ -12,12 +12,15 @@ from .datasets import VLMExample
 
 ANSWER_MARK = "Answer:"
 
-# "think" (default): let the model reason naturally inside <think>; we segment that region by
-# sentence later, so we do NOT ask for a "Step N:" summary (it would just waste tokens). "marker"
-# asks for explicit "Step N:" structure; "paragraph" is free-form. All fix the final-answer marker.
+# "think" (default): ask the model to structure its reasoning INSIDE <think> as "Step N:" so the
+# step boundaries reflect the model's own reasoning units rather than a post-hoc sentence split.
+# markers.py falls back to sentence-segmentation only if the model doesn't comply. "marker" asks
+# for the same structure but as a post-think summary (paper-faithful); "paragraph" is free-form.
+# All fix the final-answer marker.
 _ANSWER_LINE = f'After you finish reasoning, on a new line write your final answer as "{ANSWER_MARK} <answer>".'
 _STEP_INSTRUCTION = {
-    "think": _ANSWER_LINE,
+    "think": ('As you reason, structure your thinking as a numbered list where each step begins '
+              'with "Step N:" (Step 1:, Step 2:, ...). ' + _ANSWER_LINE),
     "paragraph": "Think step by step. " + _ANSWER_LINE,
     "marker": ('Show your reasoning as a numbered list where each step begins with '
                '"Step N:" (Step 1:, Step 2:, ...). ' + _ANSWER_LINE),

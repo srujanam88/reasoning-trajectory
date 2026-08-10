@@ -2,11 +2,14 @@
 
 Reuses the text pipeline's exact-offset machinery (char->token map on the TRUE generated
 tokens). Step modes:
-  - "think"     : (DEFAULT for Qwen3-VL-Thinking) segment the reasoning INSIDE <think>...</think>
-                  by sentence boundaries -- each sentence is a reasoning step. The post-</think>
-                  "Step N:" block is a summary, not reasoning, and is excluded. The answer
-                  marker is the end of </think> (reasoning complete = t(term)).
-  - "marker"    : find `Step N:` occurrences (paper-faithful, if the model complies).
+  - "think"     : (DEFAULT for Qwen3-VL-Thinking) the prompt asks the model to label its
+                  reasoning "Step N:" INSIDE <think>...</think>; steps are the `Step N:`
+                  occurrences in that region. If the model doesn't comply (no markers found),
+                  falls back to sentence-boundary segmentation of the same region. The
+                  post-</think> "Step N:" block (if any) is a summary, not reasoning, and is
+                  excluded. The answer marker is the end of </think> (reasoning complete = t(term)).
+  - "marker"    : find `Step N:` occurrences across the whole response (paper-faithful, if the
+                  model complies).
   - "paragraph" : segment the reasoning region by blank-line paragraphs.
 For marker/paragraph the answer marker is `Answer:` (falls back to `</think>`). Cached
 activation is the token PRECEDING each marker, exactly as in the text pipeline.
@@ -61,6 +64,19 @@ def parse_markers(
             if a >= 0:
                 res.answer = _make_pos("answer", 0, None, a, offsets, prompt_len)
         region_text = full_text[region_start:region_end]
+
+        # Prefer the model's own "Step N:" labeling within the think region.
+        marker_starts = [(region_start + m.start(), int(m.group(1))) for m in STEP_RE.finditer(region_text)]
+        if marker_starts:
+            ordinal = 0
+            for s, n in marker_starts:
+                if s >= region_end:
+                    break
+                ordinal += 1
+                res.steps.append(_make_pos("step", ordinal, n, s, offsets, prompt_len))
+            return res
+
+        # Fallback: model didn't use "Step N:" labels -- segment by sentence instead.
         starts = [region_start] + [region_start + m.end() for m in SENT_RE.finditer(region_text)]
         seen, ordinal = set(), 0
         for s in starts:

@@ -8,6 +8,12 @@ shared analysis layer works unchanged) plus gen.jsonl for labeling/inspection.
 
 Combined into one loop (not split S1/S2) because re-processing images for a separate pass is
 wasteful; the go/no-go teacher-forcing match rate is reported the same way.
+
+Batching: examples are processed `batch_size` at a time. Pass 1 uses LEFT padding (required so
+batched generate() continues from the same column for every row); pass 2 re-pads the resulting
+prompt+generation sequences with RIGHT padding (simpler position bookkeeping -- real content stays
+at the same offsets from position 0 regardless of what's padded on after it). batch_size=1 exactly
+reproduces the original unbatched code path (padding is a no-op on a batch of one).
 """
 from __future__ import annotations
 
@@ -50,6 +56,11 @@ def _iter_positions(mk, seq_len):
         yield ("answer", 0, mk.answer.abs_prec_pos)
 
 
+def _chunks(seq, size):
+    for i in range(0, len(seq), size):
+        yield seq[i:i + size]
+
+
 @torch.no_grad()
 def build_dataset(
     model,
@@ -61,6 +72,7 @@ def build_dataset(
     step_mode: str = "think",
     max_new_tokens: int = 2048,
     checkpoint_every: int = 50,
+    batch_size: int = 1,
 ) -> Dict:
     """Run the two-pass build over `examples`; write memmap + index + meta + gen.jsonl.
 
@@ -70,7 +82,9 @@ def build_dataset(
     out_dir.mkdir(parents=True, exist_ok=True)
     tok = processor.tokenizer
     eos_id = tok.eos_token_id
+    pad_id = tok.pad_token_id or eos_id
     n_hidden, hidden_size = backbone_dims(model)
+    tok.padding_side = "left"  # batched generate() needs every row's real prompt to end at the same column
 
     gen_f = open(out_dir / "gen.jsonl", "w")
     all_vecs: List[np.ndarray] = []
@@ -78,66 +92,97 @@ def build_dataset(
     tf_match, tf_total = 0, 0
     step_counts, n_answer = [], 0
     row = 0
+    n_done = 0
 
-    for ei, ex in enumerate(examples):
-        messages = build_messages(ex, step_mode=step_mode)
-        text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        inputs = processor(text=[text], images=ex.images or None, return_tensors="pt").to(device)
-        input_len = inputs["input_ids"].shape[1]
+    for batch in _chunks(examples, batch_size):
+        texts, images_batch = [], []
+        for ex in batch:
+            messages = build_messages(ex, step_mode=step_mode)
+            texts.append(processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True))
+            images_batch.append(ex.images or None)
+        images_arg = images_batch if any(im is not None for im in images_batch) else None
+        inputs = processor(text=texts, images=images_arg, return_tensors="pt", padding=True).to(device)
+        padded_prompt_len = inputs["input_ids"].shape[1]
+        real_lens = inputs["attention_mask"].sum(dim=1).tolist()  # per-example true prompt length
 
-        # Pass 1: greedy generation.
+        # Pass 1: batched greedy generation.
         gen = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False,
-                             pad_token_id=tok.pad_token_id or eos_id)
-        gen_ids = gen[0, input_len:].tolist()
-        if eos_id in gen_ids:
-            gen_ids = gen_ids[: gen_ids.index(eos_id)]
-        gen_text = tok.decode(gen_ids, skip_special_tokens=True)
+                             pad_token_id=pad_id)
 
-        mk = parse_markers(ex.example_id, gen_ids, tok, input_len,
-                           step_mode=step_mode, answer_mark=ANSWER_MARK)
-        step_counts.append(mk.n_steps)
-        n_answer += int(mk.answer is not None)
+        per_ex = []
+        for bi, ex in enumerate(batch):
+            real_len = int(real_lens[bi])
+            real_prompt_ids = inputs["input_ids"][bi, padded_prompt_len - real_len:].tolist()
+            gen_ids = gen[bi, padded_prompt_len:].tolist()
+            if eos_id in gen_ids:
+                gen_ids = gen_ids[: gen_ids.index(eos_id)]
+            gen_text = tok.decode(gen_ids, skip_special_tokens=True)
 
-        # Pass 2: teacher-forced forward with the SAME vision inputs.
-        full_ids = inputs["input_ids"][0].tolist() + gen_ids
-        full = torch.tensor([full_ids], dtype=torch.long, device=device)
-        attn = torch.ones_like(full)
-        vision_kwargs = {k: v for k, v in inputs.items() if k not in ("input_ids", "attention_mask")}
-        if "mm_token_type_ids" in vision_kwargs:
-            # processor only computed token types for the prompt; generated tokens are plain text (type 0).
-            mtt = vision_kwargs["mm_token_type_ids"]
-            n_pad = full.shape[1] - mtt.shape[1]
-            if n_pad > 0:
-                pad = torch.zeros((mtt.shape[0], n_pad), dtype=mtt.dtype, device=mtt.device)
-                vision_kwargs["mm_token_type_ids"] = torch.cat([mtt, pad], dim=1)
-        out = model(input_ids=full, attention_mask=attn, **vision_kwargs,
+            mk = parse_markers(ex.example_id, gen_ids, tok, real_len,
+                               step_mode=step_mode, answer_mark=ANSWER_MARK)
+            step_counts.append(mk.n_steps)
+            n_answer += int(mk.answer is not None)
+
+            real_mm = None
+            if "mm_token_type_ids" in inputs:
+                real_mm = inputs["mm_token_type_ids"][bi, padded_prompt_len - real_len:]
+            per_ex.append(dict(ex=ex, gen_ids=gen_ids, real_prompt_ids=real_prompt_ids,
+                               real_mm=real_mm, real_len=real_len, gen_text=gen_text, mk=mk))
+
+        # Pass 2: batched teacher-forced forward with the SAME vision inputs.
+        full_ids_list = [p["real_prompt_ids"] + p["gen_ids"] for p in per_ex]
+        max_len2 = max(len(f) for f in full_ids_list)
+        full_batch = torch.full((len(per_ex), max_len2), pad_id, dtype=torch.long, device=device)
+        attn_batch = torch.zeros((len(per_ex), max_len2), dtype=torch.long, device=device)
+        mm_batch = None
+        if per_ex[0]["real_mm"] is not None:
+            mm_batch = torch.zeros((len(per_ex), max_len2), dtype=per_ex[0]["real_mm"].dtype, device=device)
+        for bi, p in enumerate(per_ex):
+            L = len(full_ids_list[bi])
+            full_batch[bi, :L] = torch.tensor(full_ids_list[bi], dtype=torch.long, device=device)
+            attn_batch[bi, :L] = 1
+            if mm_batch is not None:
+                mm_batch[bi, :p["real_len"]] = p["real_mm"]  # generated-token region stays 0 (text)
+
+        vision_kwargs = {k: v for k, v in inputs.items()
+                         if k not in ("input_ids", "attention_mask", "mm_token_type_ids")}
+        if mm_batch is not None:
+            vision_kwargs["mm_token_type_ids"] = mm_batch
+
+        out = model(input_ids=full_batch, attention_mask=attn_batch, **vision_kwargs,
                     output_hidden_states=True, use_cache=False)
-        logits = out.logits[0]
-        hs = out.hidden_states  # tuple len n_hidden, each [1, seq, hidden]
-        seq_len = len(full_ids)
+        logits = out.logits
+        hs = out.hidden_states  # tuple len n_hidden, each [B, max_len2, hidden]
 
-        for q in range(input_len, seq_len):
-            tf_total += 1
-            tf_match += int(int(torch.argmax(logits[q - 1]).item()) == full_ids[q])
+        for bi, p in enumerate(per_ex):
+            ex, gen_ids, real_len, gen_text, mk = p["ex"], p["gen_ids"], p["real_len"], p["gen_text"], p["mk"]
+            full_ids = full_ids_list[bi]
+            seq_len = len(full_ids)
 
-        for ptype, step_id, p in _iter_positions(mk, seq_len):
-            vec = torch.stack([hs[l][0, p] for l in range(n_hidden)])  # [n_hidden, hidden]
-            all_vecs.append(vec.float().cpu().numpy().astype(np.float16))
-            index_rows.append({"row": row, "example_id": ex.example_id, "position_type": ptype,
-                               "step_id": step_id, "token_index": p, "n_steps": mk.n_steps,
-                               "correct": -1})
-            row += 1
+            for q in range(real_len, seq_len):
+                tf_total += 1
+                tf_match += int(int(torch.argmax(logits[bi, q - 1]).item()) == full_ids[q])
 
-        gen_f.write(json.dumps(VLMGenResult(
-            example_id=ex.example_id, dataset=ex.dataset, question_type=ex.question_type,
-            gold_answer=ex.gold_answer, choices=ex.choices, meta=ex.meta, prompt_len=input_len,
-            gen_ids=gen_ids, gen_text=gen_text, n_steps=mk.n_steps,
-            has_answer=mk.answer is not None,
-        ).to_json()) + "\n")
+            for ptype, step_id, pos in _iter_positions(mk, seq_len):
+                vec = torch.stack([hs[l][bi, pos] for l in range(n_hidden)])  # [n_hidden, hidden]
+                all_vecs.append(vec.float().cpu().numpy().astype(np.float16))
+                index_rows.append({"row": row, "example_id": ex.example_id, "position_type": ptype,
+                                   "step_id": step_id, "token_index": pos, "n_steps": mk.n_steps,
+                                   "correct": -1})
+                row += 1
 
-        if (ei + 1) % checkpoint_every == 0:
-            gen_f.flush()
-        del inputs, gen, out, hs, logits, full
+            gen_f.write(json.dumps(VLMGenResult(
+                example_id=ex.example_id, dataset=ex.dataset, question_type=ex.question_type,
+                gold_answer=ex.gold_answer, choices=ex.choices, meta=ex.meta, prompt_len=real_len,
+                gen_ids=gen_ids, gen_text=gen_text, n_steps=mk.n_steps,
+                has_answer=mk.answer is not None,
+            ).to_json()) + "\n")
+
+            n_done += 1
+            if n_done % checkpoint_every == 0:
+                gen_f.flush()
+
+        del inputs, gen, out, hs, logits, full_batch, attn_batch
         if device == "cuda":
             torch.cuda.empty_cache()
 

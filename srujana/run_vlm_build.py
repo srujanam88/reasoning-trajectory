@@ -26,11 +26,13 @@ def main():
     ap.add_argument("--step-mode", default="think", choices=["think", "marker", "paragraph"])
     ap.add_argument("--max-new-tokens", type=int, default=2048)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--batch-size", type=int, default=1, help="examples per generate()/forward() batch")
     ap.add_argument("--pilot", action="store_true", help="print sample generations for inspection")
     args = ap.parse_args()
 
     tag = f"{args.dataset}_{args.split or 'default'}_{args.step_mode}"
     rd = vcfg.run_dir(args.model, dataset=tag)
+    print(f"[VLM] loading dataset={args.dataset} split={args.split} n={args.n} ...", flush=True)
     examples = load_vlm_dataset(args.dataset, args.split, args.n, args.seed)
     print(f"[VLM] model={args.model} dataset={args.dataset} split={args.split} "
           f"n={len(examples)} step_mode={args.step_mode}")
@@ -40,7 +42,8 @@ def main():
     print(f"[VLM] device={device} n_hidden={n_hidden} hidden={hidden}")
 
     meta = build_dataset(model, processor, examples, device, rd, args.model,
-                         step_mode=args.step_mode, max_new_tokens=args.max_new_tokens)
+                         step_mode=args.step_mode, max_new_tokens=args.max_new_tokens,
+                         batch_size=args.batch_size)
 
     size_mb = (rd / "activations.dat").stat().st_size / 1e6
     print("\n=== VLM BUILD SANITY ===")

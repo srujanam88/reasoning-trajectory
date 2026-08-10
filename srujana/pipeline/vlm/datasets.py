@@ -59,11 +59,18 @@ def load_mmmu(split: str = "validation", n: Optional[int] = None, seed: int = 42
     from datasets import get_dataset_config_names, load_dataset
 
     subjects = subjects or get_dataset_config_names("MMMU/MMMU")
+    if n is not None:
+        # Downloading all 30 subjects in full just to discard most of them is wasteful for a
+        # small subsample (e.g. a pilot); shuffle and stop once we have plenty to sample from.
+        subjects = subjects[:]
+        random.Random(seed).shuffle(subjects)
     rows = []
     for subj in subjects:
         ds = load_dataset("MMMU/MMMU", subj, split=split)
         for it in ds:
             rows.append((subj, it))
+        if n is not None and len(rows) >= n * 3:
+            break
     rows = _subsample(rows, n, seed)
 
     out = []
