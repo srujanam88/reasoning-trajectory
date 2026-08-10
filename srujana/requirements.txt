@@ -1,0 +1,34 @@
+# Dependencies for the srujana/ trajectory pipeline (text + VLM).
+# Lower bounds reflect the locally-tested set; newer patch versions are fine.
+#
+# NOTE on torch: install a CUDA build matching your GPU box FIRST (RunPod images usually
+# ship one). If you must install it here, use the official index, e.g.:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+# Then: pip install -r requirements.txt
+
+# --- core ML / model loading ---
+torch>=2.4                 # tested: 2.10.0
+transformers>=4.57         # tested: 4.57.6  (needed for Qwen3-VL / model_type=qwen3_vl)
+accelerate>=1.0            # tested: 1.12.0  (large-model loading / device handling)
+huggingface_hub>=0.34      # tested: 0.34.3
+
+# --- data ---
+datasets>=3.0              # tested: 4.5.0   (GSM8K, MathVista, MMMU, CV-Bench)
+pillow>=10.0               # tested: 12.1.1  (VLM image decoding)
+pyarrow>=15.0              # tested: 23.0.0  (index.parquet)
+pandas>=2.0                # tested: 2.2.3
+
+# --- analysis (probes / distances / predictor / confidence metrics) ---
+numpy>=1.26                # tested: 1.26.4
+scipy>=1.11                # tested: 1.17.0
+scikit-learn>=1.4          # tested: 1.8.0
+
+# --- visualization ---
+matplotlib>=3.7            # tested: 3.7.5
+
+# --- misc ---
+tqdm>=4.66                 # tested: 4.67.1
+
+# Optional: some Qwen-VL setups use qwen-vl-utils for vision preprocessing. The pipeline uses
+# the native AutoProcessor path and does NOT require it; uncomment only if a run needs it.
+# qwen-vl-utils>=0.0.8
