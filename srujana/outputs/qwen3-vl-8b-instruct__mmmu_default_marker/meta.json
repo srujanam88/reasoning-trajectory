@@ -1,0 +1,13 @@
+{
+  "N": 6642,
+  "n_hidden": 37,
+  "hidden_size": 4096,
+  "model": "qwen3-vl-8b-instruct",
+  "dtype": "float16",
+  "step_mode": "marker",
+  "tf_match_rate": 0.9944368887088373,
+  "n_examples": 900,
+  "n_with_answer": 703,
+  "mean_steps": 6.598888888888889,
+  "median_steps": 5.0
+}
