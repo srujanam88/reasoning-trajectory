@@ -27,9 +27,6 @@ def main():
     ap.add_argument("--max-new-tokens", type=int, default=2048)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--batch-size", type=int, default=1, help="examples per generate()/forward() batch")
-    ap.add_argument("--resume-from-gen", action="store_true",
-                    help="reload gen_ids from this run's existing gen.jsonl and skip generation "
-                         "(pass 2 + memmap write only) -- recovery from a failed final write")
     ap.add_argument("--pilot", action="store_true", help="print sample generations for inspection")
     args = ap.parse_args()
 
@@ -40,23 +37,13 @@ def main():
     print(f"[VLM] model={args.model} dataset={args.dataset} split={args.split} "
           f"n={len(examples)} step_mode={args.step_mode}")
 
-    cached_gen_ids = None
-    if args.resume_from_gen:
-        cached_gen_ids = {}
-        for line in open(rd / "gen.jsonl"):
-            g = json.loads(line)
-            cached_gen_ids[g["example_id"]] = g["gen_ids"]
-        n_missing = sum(1 for ex in examples if ex.example_id not in cached_gen_ids)
-        print(f"[VLM] resume: loaded {len(cached_gen_ids)} cached generations "
-              f"({n_missing} example(s) not cached, will be generated fresh)")
-
     model, processor, device = vcfg.load_vlm(args.model)
     n_hidden, hidden = vcfg.backbone_dims(model)
     print(f"[VLM] device={device} n_hidden={n_hidden} hidden={hidden}")
 
     meta = build_dataset(model, processor, examples, device, rd, args.model,
                          step_mode=args.step_mode, max_new_tokens=args.max_new_tokens,
-                         batch_size=args.batch_size, cached_gen_ids=cached_gen_ids)
+                         batch_size=args.batch_size)
 
     size_mb = (rd / "activations.dat").stat().st_size / 1e6
     print("\n=== VLM BUILD SANITY ===")

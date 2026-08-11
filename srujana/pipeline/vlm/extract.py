@@ -73,15 +73,8 @@ def build_dataset(
     max_new_tokens: int = 2048,
     checkpoint_every: int = 50,
     batch_size: int = 1,
-    cached_gen_ids: Optional[Dict[str, List[int]]] = None,
 ) -> Dict:
     """Run the two-pass build over `examples`; write memmap + index + meta + gen.jsonl.
-
-    cached_gen_ids: example_id -> gen_ids, e.g. reloaded from a previous run's gen.jsonl. When
-    every example in a batch has a cached entry, pass 1 (generation, the expensive part) is
-    skipped entirely and those ids are teacher-forced straight into pass 2 -- lets a run recover
-    from a pass-2/write failure (e.g. a disk-quota hit during the final memmap flush) without
-    re-paying for generation.
 
     Returns a summary dict (tf_match_rate, N positions, step stats, answer-detect rate).
     """
@@ -112,22 +105,17 @@ def build_dataset(
         padded_prompt_len = inputs["input_ids"].shape[1]
         real_lens = inputs["attention_mask"].sum(dim=1).tolist()  # per-example true prompt length
 
-        # Pass 1: batched greedy generation -- skipped entirely if every example in this batch
-        # already has a cached gen_ids (recovery path).
-        all_cached = cached_gen_ids is not None and all(ex.example_id in cached_gen_ids for ex in batch)
-        gen = None if all_cached else model.generate(
-            **inputs, max_new_tokens=max_new_tokens, do_sample=False, pad_token_id=pad_id)
+        # Pass 1: batched greedy generation.
+        gen = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False,
+                             pad_token_id=pad_id)
 
         per_ex = []
         for bi, ex in enumerate(batch):
             real_len = int(real_lens[bi])
             real_prompt_ids = inputs["input_ids"][bi, padded_prompt_len - real_len:].tolist()
-            if cached_gen_ids is not None and ex.example_id in cached_gen_ids:
-                gen_ids = list(cached_gen_ids[ex.example_id])
-            else:
-                gen_ids = gen[bi, padded_prompt_len:].tolist()
-                if eos_id in gen_ids:
-                    gen_ids = gen_ids[: gen_ids.index(eos_id)]
+            gen_ids = gen[bi, padded_prompt_len:].tolist()
+            if eos_id in gen_ids:
+                gen_ids = gen_ids[: gen_ids.index(eos_id)]
             gen_text = tok.decode(gen_ids, skip_special_tokens=True)
 
             mk = parse_markers(ex.example_id, gen_ids, tok, real_len,
